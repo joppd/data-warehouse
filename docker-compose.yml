@@ -1,0 +1,310 @@
+version: '3.8'
+
+networks:
+    dw-net:
+        ipam:
+            driver: default
+            config:
+                - subnet: "172.66.0.0/16"
+    
+services:
+    mongo:
+        container_name: dw-mongo
+        privileged: true
+        ports:
+            - '57017:27017'
+            - '57018:27018'
+            - '57019:27019'
+            - '58017:28017'
+        restart: always
+        volumes:
+            - /storage/b/mongo-dw:/data/db
+        environment:
+            - MONGO_INITDB_ROOT_USERNAME=kong
+            - MONGO_INITDB_ROOT_PASSWORD=kong
+            - TZ="Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: mongo
+        
+
+    influxdb:
+        container_name: dw-influxdb
+        privileged: true
+        ports:
+            - '58083:8083'
+            - '58086:8086'
+            - '58088:8088'
+        restart: always
+        volumes:
+            - /storage/b/influxdb-dw/:/root/.influxdbv2
+            # - /storage/b/influxdb-dw/:/var/lib/influxdb2
+            # - /storage/b/influxdb-dw/:/var/lib/influxdb2
+            - ./influxdb-dw:/etc/influxdb2
+        environment:
+            TZ: "Asia/Seoul"
+            DOCKER_INFLUXDB_INIT_MODE: upgrade
+            DOCKER_INFLUXDB_INIT_USERNAME: kornic
+            DOCKER_INFLUXDB_INIT_PASSWORD: kornic1!
+            DOCKER_INFLUXDB_INIT_ORG: datawarehouse
+            DOCKER_INFLUXDB_INIT_BUCKET: io
+            DOCKER_INFLUXDB_INIT_UPGRADE_V1_CONFIG: /root/influxdb/influxdb.conf
+            
+        networks:
+            - 'dw-net'
+        image: quay.io/influxdb/influxdb:v2.0.4
+    
+    # grafana dashboard
+    grafana:        
+        container_name: grafana
+        privileged: true
+        restart: always
+        ports:
+            - "53000:3000"
+        user: "104"
+        environment:
+            - 'GF_INSTALL_PLUGINS=briangann-gauge-panel,briangann-datatable-panel,natel-plotly-panel,vonage-status-panel,marcuscalidus-svg-panel,grafana-piechart-panel,michaeldmoore-multistat-panel'
+            - GF_PANELS_DISABLE_SANITIZE_HTML=true
+        volumes:
+            # Data persistency
+            # sudo mkdir -p /srv/docker/grafana/data; chown 472:472 /srv/docker/grafana/data
+            - ./grafana:/var/lib/grafana
+        environment:
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: grafana/grafana:latest
+        
+    zookeeper:
+        container_name: dw-zookeeper
+        privileged: true        
+        restart: always
+        ports:
+            - 2181:2181
+        environment:
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: wurstmeister/zookeeper
+
+    kafka:
+        container_name: dw-kafka
+        privileged: true        
+        restart: always
+        ports:
+            - 1099:1099
+            - 19091:19091
+            - 19092:19092
+        environment:
+            KAFKA_ZOOKEEPER_CONNECT: dw-zookeeper:2181
+            KAFKA_SOCKET_SEND_BUFFER_BYTES: 104857600
+            KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 104857600
+            KAFKA_SOCKET_REQUEST_MAX_BYTES: 104857600
+            KAFKA_REPLICA_FETCH_MAX_BYTES: 209715200
+            KAFKA_MESSAGE_MAX_BYTES: 104857600
+            KAFKA_LOG_RETENTION_HOURS: 1
+            # KAFKA_LOG_RETENTION_MS: 30000
+            KAFKA_LOG_SEGMENT_BYTES: 1073741824
+            KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 300000
+            KAFKA_ADVERTISED_LISTENERS: INSIDE://:19091,OUTSIDE://10.1.6.41:19092
+            KAFKA_LISTENERS: INSIDE://:19091,OUTSIDE://:19092
+            KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: INSIDE:PLAINTEXT,OUTSIDE:PLAINTEXT
+            KAFKA_INTER_BROKER_LISTENER_NAME: INSIDE
+            KAFKA_JMX_OPTS: "-Dcom.sun.management.jmxremote=true -Dcom.sun.management.jmxremote.authenticate=false -Dcom.sun.management.jmxremote.ssl=false -Djava.rmi.server.hostname=kafka -Dcom.sun.management.jmxremote.rmi.port=1099 -Dcom.sun.management.jmxremote.port=1099"
+            JMX_PORT: 1099
+            TZ: "Asia/Seoul"
+        volumes:
+            - /var/run/docker.sock:/var/run/docker.sock
+            - /storage/kafka_disk/:/kafka
+        networks:
+            - 'dw-net'
+        image: wurstmeister/kafka:latest
+
+    kafka-manager-cmak:
+        container_name: dw-kafka-manager-cmak
+        privileged: true 
+        #restart: always
+        ports:
+            - 19090:9000
+        environment:
+            ZK_HOSTS: dw-zookeeper:2181
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: hlebalbau/kafka-manager:latest
+        
+    kafka-manager:
+        container_name: dw-kafka-manager
+        privileged: true 
+        #restart: always
+        ports:
+            - 19088:9000
+        environment:
+            ZK_HOSTS: dw-zookeeper:2181
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: sheepkiller/kafka-manager:latest
+        
+    kafdrop:
+        container_name: dw-kafdrop
+        privileged: true        
+        #restart: always
+        ports:
+            - 19089:9000
+        environment:
+            KAFKA_BROKERCONNECT: dw-kafka:19091
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: obsidiandynamics/kafdrop:latest
+
+    akhq:
+        container_name: kafka_akhq
+        privileged: true
+        restart: always        
+        environment:
+          TZ: "Asia/Seoul"
+        volumes:
+          - ./akhq/application.yml:/app/application.yml
+        ports:
+          - 18080:8080
+        networks:
+          - 'dw-net'
+        links:
+          - kafka
+        image: tchiotludo/akhq
+
+#    jupyter:
+#        image: jupyter/minimal-notebook:latest
+#        container_name: jupyterhub
+#        volumes:
+#          # Bind Docker socket on the host so we can connect to the daemon from within the container
+#          - "/var/run/docker.sock:/var/run/docker.sock:rw"
+#          # Bind Docker volume on host for JupyterHub database and cookie secrets
+#          - "/var/jupyter/data:/data"
+#        ports:
+#          - "10000:8000"
+#        environment:
+#          # All containers will join this network
+#          DOCKER_NETWORK_NAME: kong-network
+#          # JupyterHub will spawn this Notebook image for users
+#          DOCKER_NOTEBOOK_IMAGE: jupyter/minimal-notebook:latest
+#          # Notebook directory inside user image
+#          DOCKER_NOTEBOOK_DIR: /home/jypyterhub/work
+#          # Using this run command (optional)
+#          DOCKER_SPAWN_CMD: start-singleuser.sh
+#          # Required to authenticate users using GitHub OAuth
+#          #GITHUB_CLIENT_ID: <github_client_id>
+#          #GITHUB_CLIENT_SECRET: <github_client_secret>
+#          #OAUTH_CALLBACK_URL: https://<myhost.mydomain>/hub/oauth_callback
+#        command: >
+#          jupyterhub -f /srv/jupyterhub/jupyterhub_config.py
+#
+#        networks:
+#          - 'kong-net'
+    
+    redis:
+        container_name: dw-redis
+        privileged: true
+        ports:
+            - 26379:6379
+        restart: always
+        volumes:
+            - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
+            - /storage/redis:/data
+        environment:
+            TZ: "Asia/Seoul"
+        networks:
+            - 'dw-net'
+        image: redis:6.2.3-alpine
+        command: redis-server /usr/local/etc/redis/redis.conf
+        
+
+    service-edge-node-manager:
+        container_name: service-edge-node-manager
+        privileged: true
+        ports:
+            - '29101:29101'
+        restart: always
+        volumes:
+            - ./service-edge-node-manager:/service-edge-node-manager
+            - /var/log/service-edge-node-manager/:/var/log/service-edge-node-manager/
+        environment:
+            TZ: "Asia/Seoul"
+            PYTHONUNBUFFERED: 1
+        networks:
+            - 'dw-net'
+        build:
+            context: ./service-edge-node-manager/
+        image: service-edge-node-manager:0.1.0
+        
+    service-io-manager:
+        container_name: service-io-manager
+        privileged: true
+        ports:
+            - '29102:29102'
+        restart: always
+        volumes:
+            - ./service-io-manager:/service-io-manager
+            - /var/log/service-io-manager/:/var/log/service-io-manager/
+        environment:
+            TZ: "Asia/Seoul"
+            PYTHONUNBUFFERED: 1
+        networks:
+            - 'dw-net'
+        build:
+            context: ./service-io-manager/
+        image: service-io-manager:0.1.0
+        
+    service-io-tree-manager:
+        container_name: service-io-tree-manager
+        privileged: true
+        ports:
+            - '29104:29104'
+        restart: always
+        volumes:
+            - ./service-io-tree-manager:/service-io-tree-manager
+            - /var/log/service-io-tree-manager/:/var/log/service-io-tree-manager/
+        environment:
+            TZ: "Asia/Seoul"
+            PYTHONUNBUFFERED: 1
+        networks:
+            - 'dw-net'
+        build:
+            context: ./service-io-tree-manager/
+        image: service-io-tree-manager:0.2.0
+
+    consumer-io-sink:
+        container_name: consumer-io-sink
+        privileged: true
+        restart: always
+        volumes:
+            - ./consumer-io-sink:/consumer-io-sink
+            - /var/log/consumer-io-sink/:/var/log/consumer-io-sink/
+        environment:
+            TZ: "Asia/Seoul"
+            PYTHONUNBUFFERED: 1
+        networks:
+            - 'dw-net'
+        build:
+            context: ./consumer-io-sink/       
+        image: consumer-io-sink:0.1.0
+
+    service-io-query:
+        container_name: service-io-query
+        privileged: true
+        ports:
+            - '29103:29103'
+        restart: always
+        volumes:
+            - ./service-io-query:/service-io-query
+            - /var/log/service-io-query/:/var/log/service-io-query/
+        environment:
+            TZ: "Asia/Seoul"
+            PYTHONUNBUFFERED: 1
+        networks:
+            - 'dw-net'
+        build:
+            context: ./service-io-query/
+        image: service-io-query:0.1.0
